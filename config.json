@@ -1,0 +1,26 @@
+{
+    "telegram": {
+        "bot_token": "8438903910:AAGq32A7b4aifWESfGB2OxHWTtgwH6HeiU8",
+        "admin_ids": [1124247595]
+    },
+    "website": {
+        "cookies": {
+            "PHPSESSID": "36e9b53d880506b0fe25e7300675c827",
+            "login_token": "8afad8e7d9eb3465f81cb6026bc2c4486903b6ef495519c6c11bbbdd2ea1880f",
+            "login_key": "8272bdbd95555ef192cb952dc383fcce1a912168e5e5850c4141c506a7ab6711"
+        },
+        "defaults": {
+            "group_name": "1111",
+            "account_lock": 1,
+            "priority": "",
+            "force_proxy": "",
+            "user_price": ""
+        },
+        "urls": {
+            "base": "https://utautotransfer.com",
+            "sender_page": "https://utautotransfer.com/senderPage",
+            "add_api": "https://utautotransfer.com/dataFunctions/addAccount",
+            "search_api": "https://utautotransfer.com/dataFunctions/updateSenderPage"
+        }
+    }
+}

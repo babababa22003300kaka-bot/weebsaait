@@ -3,7 +3,7 @@
 """
 🧠 Core Functions & Utilities
 الدوال الأساسية ومدراء النظام
-✅ نسخة كاملة مع كل الدوال المفقودة
+✅ نسخة كاملة مع كل الدوال المفقودة + إضافة Queue
 """
 
 import asyncio
@@ -181,6 +181,42 @@ def parse_sender_data(text: str) -> Dict:
 
     data["codes"] = ",".join(data["codes"])
     return data
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🆕 Queue Management for Google Sheets
+# ═══════════════════════════════════════════════════════════════
+
+
+def add_to_pending_queue(email: str):
+    """
+    🆕 إضافة إيميل لقائمة الانتظار (pending.json)
+    """
+    pending_file = Path("data/pending.json")
+    pending_file.parent.mkdir(exist_ok=True)
+
+    # تحميل البيانات الحالية
+    if pending_file.exists():
+        try:
+            with open(pending_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except:
+            data = {"emails": []}
+    else:
+        data = {"emails": []}
+
+    # إضافة الإيميل الجديد
+    data["emails"].append({
+        "email": email,
+        "added_at": datetime.now().isoformat(),
+        "attempts": 0
+    })
+
+    # حفظ
+    with open(pending_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"📝 Added {email} to pending queue")
 
 
 # ═══════════════════════════════════════════════════════════════

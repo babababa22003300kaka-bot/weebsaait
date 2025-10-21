@@ -3,6 +3,7 @@
 """
 🌐 API Manager
 مدير API مع Smart Cache وBurst Mode
+✅ نسخة كاملة مع كل الإحصائيات
 """
 
 import asyncio
@@ -10,7 +11,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 
 import aiohttp
 
@@ -22,6 +23,7 @@ from config import (
     BURST_MODE_DURATION,
     FINAL_STATUSES,
 )
+from stats import stats  # ✅ استيراد من ملف منفصل
 
 logger = logging.getLogger(__name__)
 
@@ -31,65 +33,104 @@ logger = logging.getLogger(__name__)
 
 
 class SmartCacheManager:
-    """مدير ذاكرة مؤقتة ذكي"""
+    """
+    مدير ذاكرة مؤقتة ذكي مع:
+    - Smart TTL متكيف
+    - Burst mode
+    - Fallback mechanism
+    """
 
     def __init__(self):
         self.cache: Optional[List[Dict]] = None
         self.cache_timestamp: Optional[datetime] = None
         self.cache_ttl: float = CACHE_TTL_NORMAL
+
+        # Burst mode tracking
         self.burst_mode_active: bool = False
         self.burst_mode_started: Optional[datetime] = None
+
+        # Activity tracking for Smart TTL
         self.last_changes_count: int = 0
         self.consecutive_quiet_cycles: int = 0
+
+        # Fallback
         self.last_successful_cache: Optional[List[Dict]] = None
         self.last_successful_timestamp: Optional[datetime] = None
-        self.burst_targets: set = set()
+
+        # Accounts being monitored during burst
+        self.burst_targets: Set[str] = set()  # account IDs in burst mode
 
     def is_cache_valid(self) -> bool:
         """تحقق من صلاحية الـ cache"""
         if self.cache is None or self.cache_timestamp is None:
             return False
+
+        # في وضع Burst، الـ cache دائماً منتهي (نريد تحديث مستمر)
         if self.burst_mode_active:
             return False
+
         age = (datetime.now() - self.cache_timestamp).total_seconds()
         return age < self.cache_ttl
 
     def activate_burst_mode(self, account_id: str):
-        """تفعيل وضع Burst"""
+        """تفعيل وضع Burst لحساب معين"""
+        global stats
+
         if not self.burst_mode_active:
             self.burst_mode_active = True
             self.burst_mode_started = datetime.now()
-            logger.info(f"🚀 BURST MODE ON: {account_id}")
+            stats.burst_activations += 1  # ✅ رجعنا التتبع
+            logger.info(f"🚀 BURST MODE ACTIVATED for account {account_id}")
+
         self.burst_targets.add(account_id)
 
     def check_burst_mode(self):
         """تحقق وإلغاء وضع Burst إذا انتهى"""
         if not self.burst_mode_active:
             return
+
         elapsed = (datetime.now() - self.burst_mode_started).total_seconds()
+
         if elapsed >= BURST_MODE_DURATION:
             self.burst_mode_active = False
             self.burst_mode_started = None
             self.burst_targets.clear()
-            logger.info("⚡ BURST MODE OFF")
+            logger.info(f"⚡ BURST MODE DEACTIVATED (lasted {elapsed:.1f}s)")
 
     def adjust_ttl(self, changes_detected: int):
-        """تعديل ذكي لـ TTL"""
+        """
+        تعديل ذكي لـ TTL بناءً على النشاط
+
+        - كثير تغييرات → TTL قصير (استجابة أسرع)
+        - قليل تغييرات → TTL طويل (توفير موارد)
+        """
+        global stats
+
         old_ttl = self.cache_ttl
 
         if changes_detected >= 5:
+            # نشاط عالي جداً
             self.cache_ttl = CACHE_TTL_MIN
             self.consecutive_quiet_cycles = 0
+
         elif changes_detected >= 2:
+            # نشاط متوسط
             self.cache_ttl = CACHE_TTL_NORMAL
             self.consecutive_quiet_cycles = 0
+
         else:
+            # هدوء
             self.consecutive_quiet_cycles += 1
+
             if self.consecutive_quiet_cycles >= 3:
+                # 3 دورات هادئة متتالية → نطول الفترة
                 self.cache_ttl = CACHE_TTL_MAX
 
         if old_ttl != self.cache_ttl:
-            logger.info(f"🎯 TTL: {old_ttl:.0f}s → {self.cache_ttl:.0f}s")
+            stats.adaptive_adjustments += 1  # ✅ رجعنا التتبع
+            logger.info(
+                f"🎯 TTL adjusted: {old_ttl:.0f}s → {self.cache_ttl:.0f}s (changes={changes_detected})"
+            )
 
     def update_cache(self, new_data: List[Dict], success: bool = True):
         """تحديث الـ cache"""
@@ -99,7 +140,8 @@ class SmartCacheManager:
             self.last_successful_cache = new_data
             self.last_successful_timestamp = datetime.now()
         else:
-            logger.warning("⚠️ Using fallback cache")
+            # فشل التحديث - نستخدم آخر نسخة ناجحة
+            logger.warning("⚠️ Cache update failed, using last successful cache")
             if self.last_successful_cache:
                 self.cache = self.last_successful_cache
                 self.cache_timestamp = self.last_successful_timestamp
@@ -109,22 +151,28 @@ class SmartCacheManager:
         return self.cache
 
     def get_account_by_id(self, account_id: str) -> Optional[Dict]:
-        """البحث بالـ ID"""
+        """
+        🎯 البحث بالـ ID (أكثر أماناً من البحث بالإيميل)
+        """
         if not self.cache:
             return None
+
         for account in self.cache:
             if str(account.get("idAccount", "")) == str(account_id):
                 return account
+
         return None
 
     def get_account_by_email(self, email: str) -> Optional[Dict]:
-        """البحث بالإيميل"""
+        """البحث بالإيميل (للبحث الأولي)"""
         if not self.cache:
             return None
+
         email = email.lower().strip()
         for account in self.cache:
             if account.get("Sender", "").lower() == email:
                 return account
+
         return None
 
 
@@ -138,43 +186,54 @@ smart_cache = SmartCacheManager()
 
 
 class OptimizedAPIManager:
-    """مدير API مع Smart Cache"""
+    """API manager with smart cache integration"""
 
     def __init__(self, config: Dict):
         self.base_url = config["website"]["urls"]["base"]
         self.cookies = config["website"]["cookies"]
         self.defaults = config["website"]["defaults"]
+
+        # CSRF Token cache
         self.csrf_token = None
         self.csrf_expires_at = None
+
+        # aiohttp session
         self.session = None
 
     async def initialize(self):
-        """تهيئة"""
+        """Initialize API manager"""
         await self._ensure_session()
-        logger.info("🚀 API Manager initialized")
+        logger.info("🚀 API Manager initialized (Hybrid Mode)")
 
     async def _ensure_session(self):
-        """التأكد من وجود session"""
+        """Ensure aiohttp session exists"""
         if self.session is None or self.session.closed:
             connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
             timeout = aiohttp.ClientTimeout(total=30)
+
             self.session = aiohttp.ClientSession(
                 connector=connector, timeout=timeout, cookies=self.cookies
             )
 
     async def get_csrf_token(self, force_refresh: bool = False) -> Optional[str]:
-        """الحصول على CSRF token"""
+        """Get CSRF token with caching"""
+        global stats
+
         if not force_refresh and self.csrf_token and self.csrf_expires_at:
             if datetime.now() < self.csrf_expires_at:
+                stats.cache_hits += 1  # ✅ رجعنا التتبع
                 return self.csrf_token
 
-        logger.info("🔄 Fetching CSRF...")
+        logger.info("🔄 Fetching CSRF token...")
+        stats.csrf_refreshes += 1  # ✅ رجعنا التتبع
+        stats.total_requests += 1  # ✅ رجعنا التتبع
+
         await self._ensure_session()
 
         try:
-            async with self.session.get(f"{self.base_url}/senderPage") as resp:
-                if resp.status == 200:
-                    html = await resp.text()
+            async with self.session.get(f"{self.base_url}/senderPage") as response:
+                if response.status == 200:
+                    html = await response.text()
                     match = re.search(
                         r'<meta name="csrf-token" content="([^"]+)"', html
                     )
@@ -186,21 +245,31 @@ class OptimizedAPIManager:
                         logger.info(f"✅ CSRF cached ({CSRF_TOKEN_TTL}s)")
                         return self.csrf_token
         except Exception as e:
-            logger.error(f"❌ CSRF error: {e}")
+            logger.error(f"❌ CSRF fetch error: {e}")
+            stats.errors += 1  # ✅ رجعنا التتبع
 
         return None
 
     async def fetch_all_accounts_batch(self, force_refresh: bool = False) -> List[Dict]:
-        """جلب كل الحسابات"""
+        """
+        🎯 جلب مركزي للحسابات مع Smart Cache
+        """
+        global stats
+
+        # تحقق من صلاحية الـ cache
         if not force_refresh and smart_cache.is_cache_valid():
+            stats.cache_hits += 1  # ✅ رجعنا التتبع
             cached = smart_cache.get_cache()
             if cached:
                 return cached
 
         logger.info("🔄 Batch fetch...")
+        stats.batch_fetches += 1  # ✅ رجعنا التتبع
+        stats.total_requests += 1  # ✅ رجعنا التتبع
 
         csrf = await self.get_csrf_token()
         if not csrf:
+            # استخدام Fallback
             smart_cache.update_cache([], success=False)
             return smart_cache.get_cache() or []
 
@@ -211,10 +280,10 @@ class OptimizedAPIManager:
 
             async with self.session.post(
                 f"{self.base_url}/dataFunctions/updateSenderPage", data=payload
-            ) as resp:
+            ) as response:
 
-                if resp.status == 200:
-                    data = await resp.json()
+                if response.status == 200:
+                    data = await response.json()
 
                     if "data" in data:
                         accounts = data["data"]
@@ -248,30 +317,42 @@ class OptimizedAPIManager:
                                     )
                                 parsed.append(acc)
 
+                        # تحديث الـ cache
                         smart_cache.update_cache(parsed, success=True)
-                        logger.info(f"✅ Fetched {len(parsed)} accounts")
+
+                        logger.info(
+                            f"✅ Fetched {len(parsed)} accounts (TTL={smart_cache.cache_ttl:.0f}s)"
+                        )
                         return parsed
 
-                elif resp.status in [403, 419]:
+                elif response.status in [403, 419]:
                     self.csrf_token = None
                     return await self.fetch_all_accounts_batch(force_refresh=True)
 
         except Exception as e:
-            logger.error(f"❌ Fetch error: {e}")
+            logger.error(f"❌ Batch fetch error: {e}")
+            stats.errors += 1  # ✅ رجعنا التتبع
+            # استخدام Fallback
             smart_cache.update_cache([], success=False)
 
         return smart_cache.get_cache() or []
 
     async def search_sender_by_id(self, account_id: str) -> Optional[Dict]:
-        """البحث بالـ ID"""
+        """
+        🎯 البحث بالـ ID (أكثر أماناً)
+        """
+        # تحديث الـ cache إذا لزم الأمر
         if not smart_cache.is_cache_valid():
             await self.fetch_all_accounts_batch()
+
         return smart_cache.get_account_by_id(account_id)
 
     async def search_sender_by_email(self, email: str) -> Optional[Dict]:
         """البحث بالإيميل"""
+        # تحديث الـ cache إذا لزم الأمر
         if not smart_cache.is_cache_valid():
             await self.fetch_all_accounts_batch()
+
         return smart_cache.get_account_by_email(email)
 
     async def add_sender(
@@ -282,11 +363,14 @@ class OptimizedAPIManager:
         amount_take: str = "",
         amount_keep: str = "",
     ) -> Tuple[bool, str]:
-        """إضافة حساب"""
+        """Add sender"""
+        global stats
+
         csrf = await self.get_csrf_token()
         if not csrf:
             return False, "No CSRF"
 
+        stats.total_requests += 1  # ✅ رجعنا التتبع
         await self._ensure_session()
 
         payload = {
@@ -306,12 +390,13 @@ class OptimizedAPIManager:
         try:
             async with self.session.post(
                 f"{self.base_url}/dataFunctions/addAccount", json=payload
-            ) as resp:
+            ) as response:
 
-                if resp.status == 200:
+                if response.status == 200:
                     try:
-                        data = await resp.json()
+                        data = await response.json()
                         if "success" in data:
+                            # إلغاء الـ cache لإجبار تحديث
                             smart_cache.cache = None
                             smart_cache.cache_timestamp = None
                             return True, data.get("success", "Success")
@@ -321,23 +406,24 @@ class OptimizedAPIManager:
                                 return True, "Exists"
                             return False, error
                     except:
-                        text = await resp.text()
+                        text = await response.text()
                         if "success" in text.lower():
                             smart_cache.cache = None
                             smart_cache.cache_timestamp = None
                             return True, "Success"
                         return False, text[:100]
 
-                elif resp.status in [403, 419]:
+                elif response.status in [403, 419]:
                     self.csrf_token = None
                     return False, "CSRF expired"
 
-                return False, f"Status {resp.status}"
+                return False, f"Status {response.status}"
 
         except Exception as e:
+            stats.errors += 1  # ✅ رجعنا التتبع
             return False, str(e)
 
     async def close(self):
-        """إغلاق"""
+        """Cleanup"""
         if self.session and not self.session.closed:
             await self.session.close()

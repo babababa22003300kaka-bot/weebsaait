@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🤖 Telegram Bot - Main File
-البوت الرئيسي والأوامر
+🤖 Smart Telegram Sender Bot - Main File
+البوت الرئيسي مع كل الأوامر
+✅ نسخة كاملة ونهائية مع Web API و Google Sheets
 """
 
 import asyncio
@@ -20,6 +21,7 @@ from telegram.ext import (
 
 from api_manager import OptimizedAPIManager, smart_cache
 from config import FINAL_STATUSES, TRANSITIONAL_STATUSES
+from core import add_to_pending_queue  # 🆕 إضافة جديدة
 from core import (
     continuous_monitor,
     format_number,
@@ -28,12 +30,16 @@ from core import (
     is_admin,
     load_monitored_accounts,
     parse_sender_data,
-    stats,
     wait_for_status_change,
 )
+from sheets.worker import start_sheet_worker
+from stats import stats
+
+# 🆕 استيراد Web API و Sheets Worker
+from web_api.server import start_web_api
 
 # ═══════════════════════════════════════════════════════════════
-# 📝 Logging
+# 📝 Logging Configuration
 # ═══════════════════════════════════════════════════════════════
 
 logging.basicConfig(
@@ -44,7 +50,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════
-# ⚙️ Load Config
+# ⚙️ Load Configuration
 # ═══════════════════════════════════════════════════════════════
 
 with open("config.json", "r", encoding="utf-8") as f:
@@ -60,7 +66,7 @@ api_manager = None
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /start"""
+    """أمر /start - الرسالة الترحيبية"""
     user = update.effective_user
     admin_ids = CONFIG["telegram"].get("admin_ids", [])
 
@@ -68,7 +74,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ عذراً، هذا البوت خاص بالمسؤولين.")
         return
 
-    welcome = (
+    welcome_msg = (
         f"مرحباً {user.first_name}! 👋\n\n"
         "🚀 *بوت السيندرز المتطور*\n"
         "🧠 *Adaptive Hybrid Monitoring*\n\n"
@@ -80,37 +86,43 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "اسحب 100\n"
         "يسيب 50\n"
         "```\n\n"
-        "*✨ المميزات:*\n"
+        "*✨ المميزات المتقدمة:*\n"
         "• 🎯 Strict ID Validation\n"
-        "• 🚀 Burst Mode (60s)\n"
+        "• 🚀 Temporary Burst Mode (60s)\n"
         "• 🧠 Smart TTL (2-10 دقيقة)\n"
         "• 🔄 Fallback Mechanism\n"
-        "• 🌐 ثنائي اللغة\n\n"
-        "*⏱️ استجابة: 3-10 ثوانٍ*\n\n"
+        "• 🌐 Bilingual Display\n"
+        "• 🆕 Web API Integration\n"
+        "• 🆕 Google Sheets Auto-Sync\n\n"
+        "*⏱️ زمن الاستجابة: 3-10 ثوانٍ*\n\n"
         "*🔍 الأوامر:*\n"
         "`/search email@gmail.com`\n"
-        "`/monitored` - الحسابات\n"
+        "`/monitored` - الحسابات المراقبة\n"
         "`/stats` - الإحصائيات\n"
         "`/status` - حالة النظام"
     )
 
-    await update.message.reply_text(welcome, parse_mode="Markdown")
+    await update.message.reply_text(welcome_msg, parse_mode="Markdown")
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة إضافة حساب"""
+    """معالجة إضافة حساب جديد"""
     admin_ids = CONFIG["telegram"].get("admin_ids", [])
 
     if not is_admin(update.effective_user.id, admin_ids):
         return
 
+    # تجاهل الأوامر
     if update.message.text.startswith("/"):
         return
 
+    # تحليل البيانات
     data = parse_sender_data(update.message.text)
 
     if not data["email"] or not data["password"]:
-        await update.message.reply_text("❌ بيانات ناقصة!")
+        await update.message.reply_text(
+            "❌ بيانات ناقصة! تأكد من إدخال الإيميل والباسورد."
+        )
         return
 
     msg = await update.message.reply_text(
@@ -118,6 +130,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
+        # إضافة الحساب
         success, message = await api_manager.add_sender(
             email=data["email"],
             password=data["password"],
@@ -127,14 +140,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if success:
+            # 🆕 إضافة للـ Google Sheets queue
+            add_to_pending_queue(data["email"])
+
             await msg.edit_text(
                 f"✅ *تمت الإضافة!*\n"
                 f"📧 `{data['email']}`\n\n"
-                f"🚀 *BURST MODE...*\n"
+                f"🚀 *تفعيل BURST MODE...*\n"
+                f"📊 *تمت الإضافة لقائمة Google Sheets*\n"
                 f"⏱️ متوقع: 3-10 ثوانٍ",
                 parse_mode="Markdown",
             )
 
+            # مراقبة الحساب مع Burst Mode
             monitoring_success, account_info = await wait_for_status_change(
                 api_manager, data["email"], msg, update.effective_chat.id
             )
@@ -144,41 +162,48 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 status_ar = get_status_description_ar(status)
                 account_id = account_info.get("idAccount", "N/A")
 
-                result = (
+                result_text = (
                     f"✅ *تمت الإضافة بنجاح!*\n\n"
                     f"📧 `{data['email']}`\n"
                     f"🆔 ID: `{account_id}`\n\n"
-                    f"📊 *الحالة:*\n"
+                    f"📊 *الحالة النهائية:*\n"
                     f"   `{status}`\n"
                     f"   {get_status_emoji(status)} {status_ar}\n\n"
                 )
 
                 if status.upper() in ["AVAILABLE", "ACTIVE", "LOGGED", "LOGGED IN"]:
-                    result += f"🔄 *تمت الإضافة للمراقبة!*\n"
+                    result_text += f"🔄 *تمت الإضافة للمراقبة!*\n"
                 elif status.upper() in ["WRONG DETAILS", "BACKUP CODE WRONG"]:
-                    result += f"⚠️ *تحتاج مراجعة!*\n"
+                    result_text += f"⚠️ *تحتاج مراجعة!*\n"
 
                 available = format_number(account_info.get("Available", "0"))
                 taken = format_number(account_info.get("Taken", "0"))
 
                 if available != "0" or taken != "0":
-                    result += f"\n💵 المتاح: {available}\n✅ المسحوب: {taken}"
+                    result_text += f"\n💵 المتاح: {available}\n✅ المسحوب: {taken}"
 
-                await msg.edit_text(result, parse_mode="Markdown")
+                await msg.edit_text(result_text, parse_mode="Markdown")
+            else:
+                await msg.edit_text(
+                    f"⚠️ *تمت الإضافة لكن لم يتم العثور على الحساب*\n"
+                    f"📧 `{data['email']}`\n"
+                    f"💡 جرب `/search {data['email']}` بعد قليل",
+                    parse_mode="Markdown",
+                )
 
         else:
             await msg.edit_text(
-                f"❌ *فشلت الإضافة*\n📧 `{data['email']}`\n⚠️ {message}",
+                f"❌ *فشلت الإضافة*\n" f"📧 `{data['email']}`\n" f"⚠️ {message}",
                 parse_mode="Markdown",
             )
 
     except Exception as e:
-        logger.exception(f"❌ Error: {data['email']}")
-        await msg.edit_text(f"❌ خطأ: {str(e)}")
+        logger.exception(f"❌ Error adding account: {data['email']}")
+        await msg.edit_text(f"❌ خطأ غير متوقع: {str(e)}")
 
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /search"""
+    """أمر /search - البحث عن حساب"""
     admin_ids = CONFIG["telegram"].get("admin_ids", [])
 
     if not is_admin(update.effective_user.id, admin_ids):
@@ -186,7 +211,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await update.message.reply_text(
-            "📝 `/search email@example.com`", parse_mode="Markdown"
+            "📝 *الاستخدام:*\n`/search email@example.com`", parse_mode="Markdown"
         )
         return
 
@@ -210,13 +235,13 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             text = (
-                f"✅ *تم العثور*\n\n"
+                f"✅ *تم العثور على الحساب*\n\n"
                 f"📧 `{result.get('Sender', email)}`\n"
                 f"🆔 ID: `{account_id}`\n"
                 f"👥 المجموعة: {result.get('Group', 'غير محدد')}\n\n"
                 f"📊 *الحالة:* `{status}`\n"
                 f"   {get_status_emoji(status)} {status_ar}\n"
-                f"   🎯 {status_type}\n\n"
+                f"   🎯 النوع: {status_type}\n\n"
                 f"📅 البداية: {format_number(result.get('Start', '0'))}\n"
                 f"🕐 آخر تحديث: {result.get('Last Update', 'غير محدد')}\n"
                 f"💰 اسحب: {format_number(result.get('Take', '0'))}\n"
@@ -226,23 +251,27 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             accounts = load_monitored_accounts()
+            # تحقق بالـ ID
             is_monitored = any(
                 d.get("account_id") == account_id for d in accounts.values()
             )
 
             if is_monitored:
-                text += f"\n\n🔄 *مراقب* (ID-based)"
+                text += f"\n\n🔄 *هذا الحساب تحت المراقبة* (ID-based)"
 
             await msg.edit_text(text, parse_mode="Markdown")
         else:
-            await msg.edit_text(f"❌ غير موجود: `{email}`", parse_mode="Markdown")
+            await msg.edit_text(
+                f"❌ لم يتم العثور على الحساب\n📧 `{email}`", parse_mode="Markdown"
+            )
 
     except Exception as e:
-        await msg.edit_text(f"❌ خطأ: {str(e)}")
+        logger.exception(f"❌ Search error: {email}")
+        await msg.edit_text(f"❌ خطأ في البحث: {str(e)}")
 
 
 async def monitored_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /monitored"""
+    """أمر /monitored - عرض الحسابات المراقبة"""
     admin_ids = CONFIG["telegram"].get("admin_ids", [])
 
     if not is_admin(update.effective_user.id, admin_ids):
@@ -251,7 +280,7 @@ async def monitored_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     accounts = load_monitored_accounts()
 
     if not accounts:
-        await update.message.reply_text("📭 لا توجد حسابات مراقبة")
+        await update.message.reply_text("📭 لا توجد حسابات تحت المراقبة حالياً")
         return
 
     text = f"🔄 *الحسابات المراقبة ({len(accounts)})*\n\n"
@@ -275,7 +304,7 @@ async def monitored_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /stats"""
+    """أمر /stats - عرض الإحصائيات"""
     admin_ids = CONFIG["telegram"].get("admin_ids", [])
 
     if not is_admin(update.effective_user.id, admin_ids):
@@ -288,7 +317,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     requests_per_hour = stats.total_requests / hours
 
     text = (
-        "📊 *الإحصائيات*\n\n"
+        "📊 *إحصائيات النظام*\n\n"
         f"📈 إجمالي الطلبات: {stats.total_requests}\n"
         f"⏱️ المعدل: {requests_per_hour:.1f} طلب/ساعة\n"
         f"🚀 Burst activations: {stats.burst_activations}\n"
@@ -308,7 +337,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /status"""
+    """أمر /status - حالة النظام"""
     admin_ids = CONFIG["telegram"].get("admin_ids", [])
 
     if not is_admin(update.effective_user.id, admin_ids):
@@ -326,44 +355,73 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         age = (datetime.now() - smart_cache.cache_timestamp).total_seconds()
         cache_age = f"{age:.0f}s"
 
+    # 🆕 معلومات إضافية عن الخدمات الجديدة
+    api_enabled = CONFIG.get("api", {}).get("enabled", False)
+    sheets_enabled = CONFIG.get("google_sheet", {}).get("enabled", False)
+
     text = (
         "*📊 حالة النظام*\n\n"
         f"🤖 البوت: ✅ شغال\n"
-        f"⚡ Mode: *Adaptive Hybrid*\n\n"
-        f"🔑 CSRF: {'✅ صالح' if csrf_valid else '⚠️ منتهي'}\n"
-        f"💾 Cache: {'✅ نشط' if smart_cache.cache else '❌ فارغ'}\n"
+        f"⚡ Mode: *Adaptive Hybrid*\n"
+        f"🌐 Web API: {'✅ نشط' if api_enabled else '❌ معطل'}\n"
+        f"📊 Google Sheets: {'✅ نشط' if sheets_enabled else '❌ معطل'}\n\n"
+        f"🔑 CSRF Token: {'✅ صالح' if csrf_valid else '⚠️ منتهي'}\n"
+        f"💾 Cache Status: {'✅ نشط' if smart_cache.cache else '❌ فارغ'}\n"
         f"🕐 Cache Age: {cache_age}\n"
-        f"🧠 TTL: {smart_cache.cache_ttl:.0f}s\n"
-        f"🚀 Burst: {'✅ نشط' if smart_cache.burst_mode_active else '❌ معطل'}\n"
-        f"🔄 الحسابات: {len(accounts)}\n\n"
+        f"🧠 Current TTL: {smart_cache.cache_ttl:.0f}s\n"
+        f"🚀 Burst Mode: {'✅ نشط' if smart_cache.burst_mode_active else '❌ معطل'}\n"
+        f"🔄 الحسابات المراقبة: {len(accounts)}\n\n"
         f"*⚡ التحسينات:*\n"
-        f"• ID validation: ✅\n"
+        f"• Strict ID validation: ✅\n"
         f"• Burst mode (60s): ✅\n"
         f"• Smart TTL (2-10min): ✅\n"
-        f"• Fallback: ✅\n"
-        f"• Bilingual: ✅"
+        f"• Fallback mechanism: ✅\n"
+        f"• Bilingual display: ✅\n"
+        f"• Web API integration: {'✅' if api_enabled else '❌'}\n"
+        f"• Google Sheets sync: {'✅' if sheets_enabled else '❌'}"
     )
 
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ═══════════════════════════════════════════════════════════════
-# 🚀 Main Function
+# 🚀 Initialization & Main Function
 # ═══════════════════════════════════════════════════════════════
 
 
 async def post_init(application: Application):
-    """التهيئة بعد البدء"""
+    """
+    التهيئة بعد بدء البوت
+    - تهيئة API Manager
+    - تشغيل المراقب المستمر
+    - 🆕 تشغيل Web API (لو مفعّل)
+    - 🆕 تشغيل Google Sheets Worker (لو مفعّل)
+    """
     global api_manager
 
+    logger.info("🔧 Initializing API Manager...")
     await api_manager.initialize()
+
+    logger.info("🔄 Starting background monitor...")
     asyncio.create_task(continuous_monitor(api_manager, application.bot))
+
+    # 🆕 تشغيل Web API (لو مفعّل في الكونفيج)
+    if CONFIG.get("api", {}).get("enabled", False):
+        logger.info("🌐 Starting Web API...")
+        asyncio.create_task(start_web_api(CONFIG, api_manager))
+
+    # 🆕 تشغيل Google Sheets Worker (لو مفعّل في الكونفيج)
+    if CONFIG.get("google_sheet", {}).get("enabled", False):
+        logger.info("📊 Starting Google Sheets Worker...")
+        asyncio.create_task(start_sheet_worker(CONFIG))
 
     logger.info("✅ System ready!")
 
 
 def main():
-    """تشغيل البوت"""
+    """
+    🚀 تشغيل البوت الرئيسي
+    """
     global telegram_app, api_manager
 
     print("\n" + "=" * 60)
@@ -375,13 +433,15 @@ def main():
     print("   • Temporary Burst Mode (60s on new accounts)")
     print("   • Fallback Mechanism (resilient to errors)")
     print("   • Bilingual Status Display (EN/AR)")
+    print("   • 🆕 Web API Integration (FastAPI/aiohttp)")
+    print("   • 🆕 Google Sheets Auto-Sync (3 Queues)")
     print("\n📊 Intelligent & Efficient!")
     print("=" * 60 + "\n")
 
     # إنشاء API Manager
     api_manager = OptimizedAPIManager(CONFIG)
 
-    # إنشاء البوت
+    # إنشاء تطبيق Telegram
     telegram_app = (
         Application.builder()
         .token(CONFIG["telegram"]["bot_token"])
@@ -389,7 +449,7 @@ def main():
         .build()
     )
 
-    # إضافة المعالجات
+    # إضافة معالجات الأوامر
     telegram_app.add_handler(CommandHandler("start", start_command))
     telegram_app.add_handler(CommandHandler("search", search_command))
     telegram_app.add_handler(CommandHandler("monitored", monitored_command))
@@ -403,6 +463,11 @@ def main():
     print("🧠 Smart TTL: 2-10 minutes (adaptive)")
     print("🚀 Burst Mode: 60s on new accounts")
     print("🎯 ID-based validation enabled")
+    print("🌐 Web API: " + ("ON" if CONFIG.get("api", {}).get("enabled") else "OFF"))
+    print(
+        "📊 Google Sheets: "
+        + ("ON" if CONFIG.get("google_sheet", {}).get("enabled") else "OFF")
+    )
     print("📊 Check /stats for metrics\n")
 
     # تشغيل البوت
@@ -413,11 +478,11 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n⚠️ Bot stopped")
+        print("\n⚠️ Bot stopped by user")
         stats.save()
     except Exception as e:
-        print(f"❌ Error: {e}")
-        logger.exception("❌ Fatal error")
+        print(f"❌ Fatal error: {e}")
+        logger.exception("❌ Fatal error occurred")
         stats.save()
     finally:
         import asyncio

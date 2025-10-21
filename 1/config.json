@@ -34,9 +34,9 @@
   },
   
   "google_sheet": {
-    "enabled": false,
-    "spreadsheet_id": "YOUR_GOOGLE_SHEET_ID_HERE",
-    "sheet_name": "Emails",
+    "enabled": true,
+    "spreadsheet_id": "13sBpJqduNqhJX44rzN7vbMqzTpEfW8MIpOl8VKJhDP4",
+    "sheet_name": "Sheet1",
     "credentials_file": "credentials.json"
   },
   

@@ -3,7 +3,7 @@
 """
 🤖 Smart Telegram Sender Bot - Main File
 البوت الرئيسي مع كل الأوامر
-✅ نسخة كاملة ونهائية مع كل الإصلاحات
+✅ نسخة كاملة ونهائية مع Web API و Google Sheets
 """
 
 import asyncio
@@ -30,8 +30,13 @@ from core import (
     load_monitored_accounts,
     parse_sender_data,
     wait_for_status_change,
+    add_to_pending_queue,  # 🆕 إضافة جديدة
 )
-from stats import stats  # ✅ استيراد من ملف منفصل
+from stats import stats
+
+# 🆕 استيراد Web API و Sheets Worker
+from web_api.server import start_web_api
+from sheets.worker import start_sheet_worker
 
 # ═══════════════════════════════════════════════════════════════
 # 📝 Logging Configuration
@@ -86,7 +91,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🚀 Temporary Burst Mode (60s)\n"
         "• 🧠 Smart TTL (2-10 دقيقة)\n"
         "• 🔄 Fallback Mechanism\n"
-        "• 🌐 Bilingual Display\n\n"
+        "• 🌐 Bilingual Display\n"
+        "• 🆕 Web API Integration\n"
+        "• 🆕 Google Sheets Auto-Sync\n\n"
         "*⏱️ زمن الاستجابة: 3-10 ثوانٍ*\n\n"
         "*🔍 الأوامر:*\n"
         "`/search email@gmail.com`\n"
@@ -131,10 +138,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if success:
+            # 🆕 إضافة للـ Google Sheets queue
+            add_to_pending_queue(data["email"])
+            
             await msg.edit_text(
                 f"✅ *تمت الإضافة!*\n"
                 f"📧 `{data['email']}`\n\n"
                 f"🚀 *تفعيل BURST MODE...*\n"
+                f"📊 *تمت الإضافة لقائمة Google Sheets*\n"
                 f"⏱️ متوقع: 3-10 ثوانٍ",
                 parse_mode="Markdown",
             )
@@ -344,10 +355,16 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         age = (datetime.now() - smart_cache.cache_timestamp).total_seconds()
         cache_age = f"{age:.0f}s"
 
+    # 🆕 معلومات إضافية عن الخدمات الجديدة
+    api_enabled = CONFIG.get("api", {}).get("enabled", False)
+    sheets_enabled = CONFIG.get("google_sheet", {}).get("enabled", False)
+
     text = (
         "*📊 حالة النظام*\n\n"
         f"🤖 البوت: ✅ شغال\n"
-        f"⚡ Mode: *Adaptive Hybrid*\n\n"
+        f"⚡ Mode: *Adaptive Hybrid*\n"
+        f"🌐 Web API: {'✅ نشط' if api_enabled else '❌ معطل'}\n"
+        f"📊 Google Sheets: {'✅ نشط' if sheets_enabled else '❌ معطل'}\n\n"
         f"🔑 CSRF Token: {'✅ صالح' if csrf_valid else '⚠️ منتهي'}\n"
         f"💾 Cache Status: {'✅ نشط' if smart_cache.cache else '❌ فارغ'}\n"
         f"🕐 Cache Age: {cache_age}\n"
@@ -359,7 +376,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Burst mode (60s): ✅\n"
         f"• Smart TTL (2-10min): ✅\n"
         f"• Fallback mechanism: ✅\n"
-        f"• Bilingual display: ✅"
+        f"• Bilingual display: ✅\n"
+        f"• Web API integration: {'✅' if api_enabled else '❌'}\n"
+        f"• Google Sheets sync: {'✅' if sheets_enabled else '❌'}"
     )
 
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -375,6 +394,8 @@ async def post_init(application: Application):
     التهيئة بعد بدء البوت
     - تهيئة API Manager
     - تشغيل المراقب المستمر
+    - 🆕 تشغيل Web API (لو مفعّل)
+    - 🆕 تشغيل Google Sheets Worker (لو مفعّل)
     """
     global api_manager
 
@@ -383,6 +404,16 @@ async def post_init(application: Application):
 
     logger.info("🔄 Starting background monitor...")
     asyncio.create_task(continuous_monitor(api_manager, application.bot))
+
+    # 🆕 تشغيل Web API (لو مفعّل في الكونفيج)
+    if CONFIG.get("api", {}).get("enabled", False):
+        logger.info("🌐 Starting Web API...")
+        asyncio.create_task(start_web_api(CONFIG, api_manager))
+
+    # 🆕 تشغيل Google Sheets Worker (لو مفعّل في الكونفيج)
+    if CONFIG.get("google_sheet", {}).get("enabled", False):
+        logger.info("📊 Starting Google Sheets Worker...")
+        asyncio.create_task(start_sheet_worker(CONFIG))
 
     logger.info("✅ System ready!")
 
@@ -402,6 +433,8 @@ def main():
     print("   • Temporary Burst Mode (60s on new accounts)")
     print("   • Fallback Mechanism (resilient to errors)")
     print("   • Bilingual Status Display (EN/AR)")
+    print("   • 🆕 Web API Integration (FastAPI/aiohttp)")
+    print("   • 🆕 Google Sheets Auto-Sync (3 Queues)")
     print("\n📊 Intelligent & Efficient!")
     print("=" * 60 + "\n")
 
@@ -430,6 +463,8 @@ def main():
     print("🧠 Smart TTL: 2-10 minutes (adaptive)")
     print("🚀 Burst Mode: 60s on new accounts")
     print("🎯 ID-based validation enabled")
+    print("🌐 Web API: " + ("ON" if CONFIG.get("api", {}).get("enabled") else "OFF"))
+    print("📊 Google Sheets: " + ("ON" if CONFIG.get("google_sheet", {}).get("enabled") else "OFF"))
     print("📊 Check /stats for metrics\n")
 
     # تشغيل البوت

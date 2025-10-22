@@ -3,7 +3,7 @@
 """
 🤖 Smart Telegram Sender Bot - Main File
 البوت الرئيسي مع كل الأوامر
-✅ نسخة كاملة مع Source Tracking + Auto-Discovery
+✅ نسخة كاملة مع الإضافة الفورية لـ pending.json
 """
 
 import asyncio
@@ -22,7 +22,6 @@ from telegram.ext import (
 from api_manager import OptimizedAPIManager, smart_cache
 from config import FINAL_STATUSES, TRANSITIONAL_STATUSES
 from core import (
-    add_to_pending_queue,
     continuous_monitor,
     format_number,
     get_status_description_ar,
@@ -92,8 +91,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🌐 Bilingual Display\n"
         "• 🆕 Source Tracking (bot/manual)\n"
         "• 🆕 Auto-Discovery\n"
-        "• 🆕 Web API Integration\n"
-        "• 🆕 Google Sheets Auto-Sync\n\n"
+        "• 🆕 Instant Google Sheets Sync\n"
+        "• 🆕 Web API Integration\n\n"
         "*⏱️ زمن الاستجابة: 3-10 ثوانٍ*\n\n"
         "*🔍 الأوامر:*\n"
         "`/search email@gmail.com`\n"
@@ -140,25 +139,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if success:
-            # 🆕 إضافة للـ Google Sheets queue
-            add_to_pending_queue(data["email"])
-
             await msg.edit_text(
                 f"✅ *تمت الإضافة!*\n"
                 f"📧 `{data['email']}`\n\n"
                 f"🚀 *تفعيل BURST MODE...*\n"
-                f"📊 *تمت الإضافة لقائمة Google Sheets*\n"
                 f"⏱️ متوقع: 3-10 ثوانٍ",
                 parse_mode="Markdown",
             )
 
-            # 🆕 مراقبة الحساب مع تمرير default_group_name
+            # 🆕 مراقبة الحساب (الإضافة لـ pending.json ستحدث تلقائياً داخل wait_for_status_change)
             monitoring_success, account_info = await wait_for_status_change(
                 api_manager,
                 data["email"],
                 msg,
                 update.effective_chat.id,
-                CONFIG["website"]["defaults"]["group_name"],  # 🆕 NEW PARAMETER
+                CONFIG["website"]["defaults"]["group_name"],
             )
 
             if account_info:
@@ -169,7 +164,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result_text = (
                     f"✅ *تمت الإضافة بنجاح!*\n\n"
                     f"📧 `{data['email']}`\n"
-                    f"🆔 ID: `{account_id}`\n\n"
+                    f"🆔 ID: `{account_id}`\n"
+                    f"📊 *تمت الإضافة لـ Google Sheets*\n\n"
                     f"📊 *الحالة النهائية:*\n"
                     f"   `{status}`\n"
                     f"   {get_status_emoji(status)} {status_ar}\n\n"
@@ -183,9 +179,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if group_name == default_group:
                         result_text += f"🔄 *تم إدراجه في المراقبة (المصدر: البوت)*\n"
                     else:
-                        result_text += (
-                            f"ℹ️ *لم يتم إدراجه (الجروب مختلف: {group_name})*\n"
-                        )
+                        result_text += f"ℹ️ *لم يتم إدراجه في المراقبة (الجروب مختلف: {group_name})*\n"
                 elif status.upper() in ["WRONG DETAILS", "BACKUP CODE WRONG"]:
                     result_text += f"⚠️ *تحتاج مراجعة!*\n"
 
@@ -394,6 +388,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Smart TTL (2-10min): ✅\n"
         f"• Source tracking: ✅\n"
         f"• Auto-discovery: ✅\n"
+        f"• Instant Sheets sync: ✅\n"
         f"• Fallback mechanism: ✅\n"
         f"• Bilingual display: ✅\n"
         f"• Web API integration: {'✅' if api_enabled else '❌'}\n"
@@ -460,10 +455,10 @@ def main():
     print("   • Temporary Burst Mode (60s on new accounts)")
     print("   • Source Tracking (bot/manual)")
     print("   • Auto-Discovery (AVAILABLE + default group)")
+    print("   • Instant Google Sheets Sync on ID detection")
     print("   • Fallback Mechanism (resilient to errors)")
     print("   • Bilingual Status Display (EN/AR)")
     print("   • Web API Integration (FastAPI/aiohttp)")
-    print("   • Google Sheets Auto-Sync (3 Queues)")
     print("\n📊 Intelligent & Efficient!")
     print("=" * 60 + "\n")
 
@@ -494,6 +489,7 @@ def main():
     print("🎯 ID-based validation enabled")
     print("🆕 Source tracking: bot/manual")
     print("🆕 Auto-discovery: ON")
+    print("🆕 Instant pending.json addition on ID detection")
     print("🌐 Web API: " + ("ON" if CONFIG.get("api", {}).get("enabled") else "OFF"))
     print(
         "📊 Google Sheets: "

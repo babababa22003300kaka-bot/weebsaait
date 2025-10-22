@@ -51,8 +51,8 @@ TRANSITIONAL_STATUSES: Set[str] = {
     "LOGGING",
     "LOGGED",
     "LOGGED IN",
-    "CODE SENT",
     "WAITING",
+    "NEW ACCOUNT",
 }
 
 FINAL_STATUSES: Set[str] = {
@@ -60,7 +60,7 @@ FINAL_STATUSES: Set[str] = {
     "ACTIVE",
     "WRONG DETAILS",
     "BACKUP CODE WRONG",
-    "NEW ACCOUNT",
+    "CODE SENT",
     "DISABLED",
     "NO TRANSFER ACCESS",
     "TRANSFER LIST IS FULL",

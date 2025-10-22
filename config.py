@@ -15,9 +15,9 @@ from typing import Set
 CSRF_TOKEN_TTL = 1200  # 20 دقيقة
 
 # Smart Cache Settings
-CACHE_TTL_MIN = 120  # 2 دقيقة (عند نشاط عالي)
-CACHE_TTL_NORMAL = 300  # 5 دقائق (عادي)
-CACHE_TTL_MAX = 600  # 10 دقائق (عند هدوء)
+CACHE_TTL_MIN = 60  # 2 دقيقة (عند نشاط عالي)
+CACHE_TTL_NORMAL = 90  # 1.5 دقيقة (عادي)
+CACHE_TTL_MAX = 120  # 2 دقيقة (عند هدوء)
 
 # Burst Mode Settings
 BURST_MODE_DURATION = 60  # مدة الـ Burst: 60 ثانية

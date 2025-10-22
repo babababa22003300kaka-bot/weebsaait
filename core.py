@@ -3,7 +3,7 @@
 """
 🧠 Core Functions & Utilities
 الدوال الأساسية ومدراء النظام
-✅ نسخة كاملة مع كل الدوال المفقودة + إضافة Queue
+✅ نسخة كاملة مع Source Tracking + Auto-Discovery
 """
 
 import asyncio
@@ -15,23 +15,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+from api_manager import smart_cache
 from config import (
+    BURST_MODE_INTERVAL,
+    FINAL_STATUSES,
     MONITORED_ACCOUNTS_FILE,
     POLLING_INTERVALS,
-    TRANSITIONAL_STATUSES,
-    FINAL_STATUSES,
-    STATUS_EMOJIS,
     STATUS_DESCRIPTIONS_AR,
-    BURST_MODE_INTERVAL,
+    STATUS_EMOJIS,
+    TRANSITIONAL_STATUSES,
 )
-from api_manager import smart_cache
 from stats import stats
 
 logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════
-# 💾 Database Functions with ID Validation
+# 💾 Database Functions with ID Validation + Source Tracking
 # ═══════════════════════════════════════════════════════════════
 
 
@@ -55,26 +55,36 @@ def save_monitored_accounts(accounts: Dict):
         logger.error(f"❌ Save error: {e}")
 
 
-def add_monitored_account(email: str, account_id: str, status: str, chat_id: int):
+def add_monitored_account(
+    email: str,
+    account_id: str,
+    status: str,
+    chat_id: int,
+    source: str = "manual",  # 🆕 NEW PARAMETER
+):
     """
-    🎯 إضافة حساب للمراقبة مع تخزين الـ ID الموثوق
+    🎯 إضافة حساب للمراقبة مع تخزين الـ ID الموثوق + المصدر
     """
     accounts = load_monitored_accounts()
 
     # استخدام الـ ID كـ key رئيسي (أكثر أماناً من الإيميل)
-    key = f"{account_id}_{email}"  # مفتاح فريد
+    key = f"{account_id}_{email}"
 
     accounts[key] = {
         "email": email,
-        "account_id": account_id,  # 🎯 الهوية الموثوقة
+        "account_id": account_id,
         "last_known_status": status,
         "chat_id": chat_id,
+        "source": source,  # 🆕 تتبع المصدر
         "added_at": datetime.now().isoformat(),
         "last_check": datetime.now().isoformat(),
     }
     save_monitored_accounts(accounts)
 
-    logger.info(f"✅ Account added to monitoring: {email} (ID: {account_id})")
+    source_label = "البوت 🤖" if source == "bot" else "يدوي 👤"
+    logger.info(
+        f"✅ Account added to monitoring: {email} (ID: {account_id}, Source: {source_label})"
+    )
 
 
 def update_monitored_account_status(account_id: str, new_status: str):
@@ -206,11 +216,9 @@ def add_to_pending_queue(email: str):
         data = {"emails": []}
 
     # إضافة الإيميل الجديد
-    data["emails"].append({
-        "email": email,
-        "added_at": datetime.now().isoformat(),
-        "attempts": 0
-    })
+    data["emails"].append(
+        {"email": email, "added_at": datetime.now().isoformat(), "attempts": 0}
+    )
 
     # حفظ
     with open(pending_file, "w", encoding="utf-8") as f:
@@ -220,20 +228,25 @@ def add_to_pending_queue(email: str):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 🚀 Burst Mode Initial Monitoring
+# 🚀 Burst Mode Initial Monitoring + Source Tracking
 # ═══════════════════════════════════════════════════════════════
 
 
 async def wait_for_status_change(
-    api_manager, email: str, message_obj, chat_id: int
+    api_manager,
+    email: str,
+    message_obj,
+    chat_id: int,
+    default_group_name: str,  # 🆕 NEW PARAMETER
 ) -> Tuple[bool, Optional[Dict]]:
     """
-    🚀 مراقبة مع Burst Mode المؤقت
+    🚀 مراقبة مع Burst Mode المؤقت + تحديد المصدر
 
     عند إضافة حساب جديد:
     1. تفعيل Burst Mode (تحديث cache كل 2.5 ثانية)
     2. مراقبة سريعة جداً للحساب الجديد
-    3. إلغاء Burst بعد 60 ثانية أو عند الوصول لحالة نهائية
+    3. ✅ إضافة للمراقبة فقط لو: AVAILABLE + جروب مطابق
+    4. 🆕 تعيين source="bot"
     """
 
     global stats
@@ -281,7 +294,7 @@ async def wait_for_status_change(
     # 🚀 الخطوة 2: مراقبة سريعة مع Burst Mode
     logger.info(f"🚀 Starting burst monitoring for {email} (ID: {account_id})")
 
-    max_attempts = 40  # 40 محاولة * 2.5 ثانية = 100 ثانية max
+    max_attempts = 20  # 20 محاولة * 2.5 ثانية = 100 ثانية max
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -312,7 +325,7 @@ async def wait_for_status_change(
                 )
 
                 if last_status and status in FINAL_STATUSES:
-                    stats.fast_detections += 1  # ✅ رجعنا التتبع
+                    stats.fast_detections += 1
                     logger.info(
                         f"⚡ FAST: {last_status} → {status} in {change_time:.1f}s"
                     )
@@ -357,14 +370,25 @@ async def wait_for_status_change(
                 parse_mode="Markdown",
             )
 
-            # منطق التوقف
+            # 🆕 منطق التوقف + شرط الإضافة الجديد
             if is_final:
                 response_time = (datetime.now() - start_time).total_seconds()
                 logger.info(f"✅ {email} STABLE at {status} in {response_time:.1f}s")
 
-                # إضافة للمراقبة المستمرة
-                if status in ["AVAILABLE", "ACTIVE", "LOGGED", "LOGGED IN"]:
-                    add_monitored_account(email, account_id, status, chat_id)
+                # 🆕 إضافة للمراقبة فقط لو: AVAILABLE + جروب مطابق
+                added_to_monitor = False
+
+                if status == "AVAILABLE":
+                    group_name = account_info.get("Group", "")
+                    if group_name == default_group_name:  # ← مطابقة دقيقة
+                        add_monitored_account(
+                            email,
+                            account_id,
+                            status,
+                            chat_id,
+                            source="bot",  # 🆕 من البوت
+                        )
+                        added_to_monitor = True
 
                 # إلغاء Burst Mode
                 smart_cache.burst_mode_active = False
@@ -394,17 +418,20 @@ async def wait_for_status_change(
     if account_id:
         smart_cache.burst_targets.discard(account_id)
 
+    # 🆕 شرط الإضافة المحدّث
     if account_info:
         status = account_info.get("Status", "").upper()
-        if status in ["AVAILABLE", "ACTIVE", "LOGGED", "LOGGED IN"]:
-            add_monitored_account(email, account_id, status, chat_id)
+        if status == "AVAILABLE":
+            group_name = account_info.get("Group", "")
+            if group_name == default_group_name:
+                add_monitored_account(email, account_id, status, chat_id, source="bot")
         return True, account_info
 
     return False, None
 
 
 # ═══════════════════════════════════════════════════════════════
-# 📧 Notification Function (الدالة اللي راحت!)
+# 📧 Notification Function with Source Display
 # ═══════════════════════════════════════════════════════════════
 
 
@@ -416,20 +443,30 @@ async def send_status_notification(
     new_status: str,
     chat_id: int,
     account_data: Dict,
+    source: str = "manual",  # 🆕 NEW PARAMETER
 ):
     """
-    ✅ إرسال إشعار تغيير الحالة (الدالة المفقودة!)
+    ✅ إرسال إشعار تغيير الحالة مع عرض المصدر
     """
     try:
+        # Skip if no valid chat_id
+        if not chat_id:
+            logger.info(f"ℹ️ Skip notification for {email}: no chat_id")
+            return
+
         old_emoji = get_status_emoji(old_status)
         new_emoji = get_status_emoji(new_status)
 
         old_status_ar = get_status_description_ar(old_status)
         new_status_ar = get_status_description_ar(new_status)
 
+        # 🆕 Source line
+        source_line = "🤖 المصدر: من البوت" if source == "bot" else "👤 المصدر: يدوي"
+
         notification = (
             f"🔔 *تنبيه تغيير الحالة!*\n\n"
-            f"📧 البريد: `{email}`\n"
+            f"📧 `{email}`\n"
+            f"{source_line}\n"  # 🆕 NEW LINE
             f"🆔 ID: `{account_id}`\n\n"
             f"📊 *الحالة السابقة:*\n"
             f"   `{old_status}`\n"
@@ -457,34 +494,82 @@ async def send_status_notification(
 
 
 # ═══════════════════════════════════════════════════════════════
-# 🔄 Background Monitor with Smart TTL
+# 🔄 Background Monitor with Smart TTL + Auto-Discovery
 # ═══════════════════════════════════════════════════════════════
 
 
-async def continuous_monitor(api_manager, telegram_bot):
+async def continuous_monitor(
+    api_manager,
+    telegram_bot,
+    default_group_name: str,  # 🆕 NEW PARAMETER
+    default_chat_id: Optional[int],  # 🆕 NEW PARAMETER
+):
     """
-    🎯 مراقب مستمر مع Smart TTL
+    🎯 مراقب مستمر مع Smart TTL + Auto-Discovery
     """
 
-    logger.info("🔄 Background monitor started (Smart TTL)")
+    logger.info("🔄 Background monitor started (Smart TTL + Auto-Discovery)")
 
     while True:
         try:
             accounts = load_monitored_accounts()
 
-            if not accounts:
-                await asyncio.sleep(30)
-                continue
-
-            # تحديث الـ cache
+            # Fetch all accounts
             all_accounts = await api_manager.fetch_all_accounts_batch()
 
-            # بناء dictionary بالـ ID للبحث الأسرع
+            # Build ID dictionary
             accounts_by_id = {
                 acc.get("idAccount"): acc
                 for acc in all_accounts
                 if acc.get("idAccount")
             }
+
+            # 🆕 AUTO-DISCOVERY LOGIC
+            existing_ids = {
+                data.get("account_id")
+                for data in accounts.values()
+                if data.get("account_id")
+            }
+
+            auto_added = False
+            for account in all_accounts:
+                account_id = account.get("idAccount")
+
+                # Skip if:
+                # - No ID
+                # - Already monitored
+                # - Not AVAILABLE
+                # - Group doesn't match
+                if (
+                    not account_id
+                    or account_id in existing_ids
+                    or account.get("Status", "").upper() != "AVAILABLE"
+                    or account.get("Group", "") != default_group_name  # 🎯 exact match
+                ):
+                    continue
+
+                # Auto-add
+                email = account.get("Sender", "")
+                chat_id = default_chat_id or 0
+                add_monitored_account(
+                    email,
+                    account_id,
+                    "AVAILABLE",
+                    chat_id,
+                    source="manual",  # 🆕 auto-discovered = manual
+                )
+                existing_ids.add(account_id)
+                auto_added = True
+                logger.info(f"✅ Auto-monitored {email} (AVAILABLE + default group)")
+
+            # Reload if auto-added
+            if auto_added:
+                accounts = load_monitored_accounts()
+
+            # Skip if no accounts
+            if not accounts:
+                await asyncio.sleep(30)
+                continue
 
             changes_detected = 0
 
@@ -521,7 +606,7 @@ async def continuous_monitor(api_manager, telegram_bot):
 
                         update_monitored_account_status(account_id, current_status)
 
-                        # ✅ إرسال الإشعار (الدالة المفقودة!)
+                        # ✅ إرسال الإشعار مع المصدر
                         await send_status_notification(
                             telegram_bot,
                             email,
@@ -530,6 +615,7 @@ async def continuous_monitor(api_manager, telegram_bot):
                             current_status,
                             data["chat_id"],
                             account_info,
+                            data.get("source", "manual"),  # 🆕 pass source
                         )
                     else:
                         update_monitored_account_status(account_id, current_status)

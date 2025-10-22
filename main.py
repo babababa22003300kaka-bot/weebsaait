@@ -3,7 +3,7 @@
 """
 🤖 Smart Telegram Sender Bot - Main File
 البوت الرئيسي مع كل الأوامر
-✅ نسخة كاملة ونهائية مع Web API و Google Sheets
+✅ نسخة كاملة مع Source Tracking + Auto-Discovery
 """
 
 import asyncio
@@ -21,8 +21,8 @@ from telegram.ext import (
 
 from api_manager import OptimizedAPIManager, smart_cache
 from config import FINAL_STATUSES, TRANSITIONAL_STATUSES
-from core import add_to_pending_queue  # 🆕 إضافة جديدة
 from core import (
+    add_to_pending_queue,
     continuous_monitor,
     format_number,
     get_status_description_ar,
@@ -34,8 +34,6 @@ from core import (
 )
 from sheets.worker import start_sheet_worker
 from stats import stats
-
-# 🆕 استيراد Web API و Sheets Worker
 from web_api.server import start_web_api
 
 # ═══════════════════════════════════════════════════════════════
@@ -92,6 +90,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🧠 Smart TTL (2-10 دقيقة)\n"
         "• 🔄 Fallback Mechanism\n"
         "• 🌐 Bilingual Display\n"
+        "• 🆕 Source Tracking (bot/manual)\n"
+        "• 🆕 Auto-Discovery\n"
         "• 🆕 Web API Integration\n"
         "• 🆕 Google Sheets Auto-Sync\n\n"
         "*⏱️ زمن الاستجابة: 3-10 ثوانٍ*\n\n"
@@ -152,9 +152,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
             )
 
-            # مراقبة الحساب مع Burst Mode
+            # 🆕 مراقبة الحساب مع تمرير default_group_name
             monitoring_success, account_info = await wait_for_status_change(
-                api_manager, data["email"], msg, update.effective_chat.id
+                api_manager,
+                data["email"],
+                msg,
+                update.effective_chat.id,
+                CONFIG["website"]["defaults"]["group_name"],  # 🆕 NEW PARAMETER
             )
 
             if account_info:
@@ -171,8 +175,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"   {get_status_emoji(status)} {status_ar}\n\n"
                 )
 
-                if status.upper() in ["AVAILABLE", "ACTIVE", "LOGGED", "LOGGED IN"]:
-                    result_text += f"🔄 *تمت الإضافة للمراقبة!*\n"
+                # 🆕 عرض حالة الإضافة للمراقبة
+                if status.upper() == "AVAILABLE":
+                    group_name = account_info.get("Group", "")
+                    default_group = CONFIG["website"]["defaults"]["group_name"]
+
+                    if group_name == default_group:
+                        result_text += f"🔄 *تم إدراجه في المراقبة (المصدر: البوت)*\n"
+                    else:
+                        result_text += (
+                            f"ℹ️ *لم يتم إدراجه (الجروب مختلف: {group_name})*\n"
+                        )
                 elif status.upper() in ["WRONG DETAILS", "BACKUP CODE WRONG"]:
                     result_text += f"⚠️ *تحتاج مراجعة!*\n"
 
@@ -271,7 +284,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def monitored_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /monitored - عرض الحسابات المراقبة"""
+    """أمر /monitored - عرض الحسابات المراقبة مع المصدر"""
     admin_ids = CONFIG["telegram"].get("admin_ids", [])
 
     if not is_admin(update.effective_user.id, admin_ids):
@@ -291,8 +304,13 @@ async def monitored_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = data["last_known_status"]
         status_ar = get_status_description_ar(status)
 
+        # 🆕 عرض المصدر
+        source = data.get("source", "manual")  # default للحسابات القديمة
+        source_line = "🤖 من البوت" if source == "bot" else "👤 يدوي"
+
         text += (
             f"📧 `{email}`\n"
+            f"   {source_line}\n"  # 🆕 NEW LINE
             f"   🆔 `{account_id}`\n"
             f"   📊 *{status}*\n"
             f"   {get_status_emoji(status)} {status_ar}\n\n"
@@ -355,7 +373,6 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         age = (datetime.now() - smart_cache.cache_timestamp).total_seconds()
         cache_age = f"{age:.0f}s"
 
-    # 🆕 معلومات إضافية عن الخدمات الجديدة
     api_enabled = CONFIG.get("api", {}).get("enabled", False)
     sheets_enabled = CONFIG.get("google_sheet", {}).get("enabled", False)
 
@@ -375,6 +392,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Strict ID validation: ✅\n"
         f"• Burst mode (60s): ✅\n"
         f"• Smart TTL (2-10min): ✅\n"
+        f"• Source tracking: ✅\n"
+        f"• Auto-discovery: ✅\n"
         f"• Fallback mechanism: ✅\n"
         f"• Bilingual display: ✅\n"
         f"• Web API integration: {'✅' if api_enabled else '❌'}\n"
@@ -392,25 +411,33 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     """
     التهيئة بعد بدء البوت
-    - تهيئة API Manager
-    - تشغيل المراقب المستمر
-    - 🆕 تشغيل Web API (لو مفعّل)
-    - 🆕 تشغيل Google Sheets Worker (لو مفعّل)
     """
     global api_manager
 
     logger.info("🔧 Initializing API Manager...")
     await api_manager.initialize()
 
-    logger.info("🔄 Starting background monitor...")
-    asyncio.create_task(continuous_monitor(api_manager, application.bot))
+    # 🆕 تمرير parameters للمراقب
+    default_group_name = CONFIG["website"]["defaults"]["group_name"]
+    admin_ids = CONFIG["telegram"].get("admin_ids", [])
+    default_chat_id = admin_ids[0] if admin_ids else None
 
-    # 🆕 تشغيل Web API (لو مفعّل في الكونفيج)
+    logger.info("🔄 Starting background monitor (with auto-discovery)...")
+    asyncio.create_task(
+        continuous_monitor(
+            api_manager,
+            application.bot,
+            default_group_name,  # 🆕 NEW PARAMETER
+            default_chat_id,  # 🆕 NEW PARAMETER
+        )
+    )
+
+    # تشغيل Web API
     if CONFIG.get("api", {}).get("enabled", False):
         logger.info("🌐 Starting Web API...")
         asyncio.create_task(start_web_api(CONFIG, api_manager))
 
-    # 🆕 تشغيل Google Sheets Worker (لو مفعّل في الكونفيج)
+    # تشغيل Google Sheets Worker
     if CONFIG.get("google_sheet", {}).get("enabled", False):
         logger.info("📊 Starting Google Sheets Worker...")
         asyncio.create_task(start_sheet_worker(CONFIG))
@@ -431,10 +458,12 @@ def main():
     print("   • Smart Cache with adaptive TTL (2-10 min)")
     print("   • Strict ID Validation (account_id based)")
     print("   • Temporary Burst Mode (60s on new accounts)")
+    print("   • Source Tracking (bot/manual)")
+    print("   • Auto-Discovery (AVAILABLE + default group)")
     print("   • Fallback Mechanism (resilient to errors)")
     print("   • Bilingual Status Display (EN/AR)")
-    print("   • 🆕 Web API Integration (FastAPI/aiohttp)")
-    print("   • 🆕 Google Sheets Auto-Sync (3 Queues)")
+    print("   • Web API Integration (FastAPI/aiohttp)")
+    print("   • Google Sheets Auto-Sync (3 Queues)")
     print("\n📊 Intelligent & Efficient!")
     print("=" * 60 + "\n")
 
@@ -463,6 +492,8 @@ def main():
     print("🧠 Smart TTL: 2-10 minutes (adaptive)")
     print("🚀 Burst Mode: 60s on new accounts")
     print("🎯 ID-based validation enabled")
+    print("🆕 Source tracking: bot/manual")
+    print("🆕 Auto-discovery: ON")
     print("🌐 Web API: " + ("ON" if CONFIG.get("api", {}).get("enabled") else "OFF"))
     print(
         "📊 Google Sheets: "

@@ -3,7 +3,7 @@
 """
 🧠 Core Functions & Utilities
 الدوال الأساسية ومدراء النظام
-✅ نسخة كاملة مع Source Tracking + Auto-Discovery
+✅ نسخة كاملة مع الإضافة الفورية للـ pending.json
 """
 
 import asyncio
@@ -194,13 +194,14 @@ def parse_sender_data(text: str) -> Dict:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 🆕 Queue Management for Google Sheets
+# 🆕 Queue Management for Google Sheets (IMMEDIATE ADDITION)
 # ═══════════════════════════════════════════════════════════════
 
 
-def add_to_pending_queue(email: str):
+def add_to_pending_queue_immediately(email: str, account_id: str):
     """
-    🆕 إضافة إيميل لقائمة الانتظار (pending.json)
+    🆕 إضافة فورية للإيميل والID في pending.json (بدون انتظار)
+    تستخدم عند اكتشاف الـ ID مباشرة
     """
     pending_file = Path("data/pending.json")
     pending_file.parent.mkdir(exist_ok=True)
@@ -215,16 +216,49 @@ def add_to_pending_queue(email: str):
     else:
         data = {"emails": []}
 
-    # إضافة الإيميل الجديد
+    # إضافة الإيميل والـ ID فوراً
     data["emails"].append(
-        {"email": email, "added_at": datetime.now().isoformat(), "attempts": 0}
+        {"email": email, "id": account_id, "added_at": datetime.now().isoformat()}
     )
 
     # حفظ
     with open(pending_file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    logger.info(f"📝 Added {email} to pending queue")
+    logger.info(f"📝 Added {email} (ID: {account_id}) to pending queue IMMEDIATELY")
+
+
+def add_to_pending_queue(email: str):
+    """
+    دالة للتوافق مع Web API - تضيف بدون ID
+    """
+    pending_file = Path("data/pending.json")
+    pending_file.parent.mkdir(exist_ok=True)
+
+    # تحميل البيانات الحالية
+    if pending_file.exists():
+        try:
+            with open(pending_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except:
+            data = {"emails": []}
+    else:
+        data = {"emails": []}
+
+    # إضافة الإيميل بدون ID
+    data["emails"].append(
+        {
+            "email": email,
+            "id": "N/A",  # سيتم تحديثه لاحقاً
+            "added_at": datetime.now().isoformat(),
+        }
+    )
+
+    # حفظ
+    with open(pending_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"📝 Added {email} to pending queue (via API)")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -244,9 +278,9 @@ async def wait_for_status_change(
 
     عند إضافة حساب جديد:
     1. تفعيل Burst Mode (تحديث cache كل 2.5 ثانية)
-    2. مراقبة سريعة جداً للحساب الجديد
-    3. ✅ إضافة للمراقبة فقط لو: AVAILABLE + جروب مطابق
-    4. 🆕 تعيين source="bot"
+    2. 🆕 إضافة فورية لـ pending.json عند اكتشاف ID
+    3. مراقبة سريعة جداً للحساب الجديد
+    4. إضافة للمراقبة فقط لو: AVAILABLE + جروب مطابق
     """
 
     global stats
@@ -274,6 +308,9 @@ async def wait_for_status_change(
                 # 🚀 تفعيل Burst Mode لهذا الحساب
                 smart_cache.activate_burst_mode(account_id)
 
+                # 🆕 إضافة فورية للـ pending.json (نفس اللحظة)
+                add_to_pending_queue_immediately(email, account_id)
+
                 break
 
         await message_obj.edit_text(
@@ -294,7 +331,7 @@ async def wait_for_status_change(
     # 🚀 الخطوة 2: مراقبة سريعة مع Burst Mode
     logger.info(f"🚀 Starting burst monitoring for {email} (ID: {account_id})")
 
-    max_attempts = 20  # 20 محاولة * 2.5 ثانية = 100 ثانية max
+    max_attempts = 40  # 40 محاولة * 2.5 ثانية = 100 ثانية max
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -359,7 +396,8 @@ async def wait_for_status_change(
             await message_obj.edit_text(
                 f"{mode_indicator} *مراقبة ذكية*\n\n"
                 f"📧 `{email}`\n"
-                f"🆔 ID: `{account_id}`\n\n"
+                f"🆔 ID: `{account_id}`\n"
+                f"📊 *تمت الإضافة لـ Google Sheets*\n\n"
                 f"📊 *الحالة:* `{status}`\n"
                 f"   {get_status_emoji(status)} {status_ar}\n\n"
                 f"🎯 النوع: {status_type}\n"

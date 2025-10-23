@@ -3,7 +3,7 @@
 """
 ⚙️ Google Sheets Worker
 Background worker مع 2 timers منفصلة (pending و retry)
-بدون حد لعدد الإيميلات - كل الـ batch يروح دفعة واحدة
+✅ محدث مع تسجيل ID History
 """
 
 import asyncio
@@ -21,6 +21,7 @@ from .queue_manager import (
     move_to_retry,
     save_queue,
 )
+from .id_history import add_ids_to_history  # 🆕 استيراد جديد
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ async def pending_worker(
 
     - يجيب كل الإيميلات من pending.json
     - يحاول يضيفهم كلهم دفعة واحدة للشيت
-    - لو نجح: يمسح الملف
+    - لو نجح: يمسح الملف ويسجل الـ IDs
     - لو فشل: ينقل كل واحد لـ retry (ما عدا اللي وصلوا 50 محاولة → failed)
     """
     queue_config = config.get("queue", {})
@@ -49,7 +50,7 @@ async def pending_worker(
             batch = get_pending_batch()
 
             if batch:
-                # ✅ الجديد: تمرير Email + ID
+                # تمرير Email + ID
                 emails_data = [
                     {"email": item["email"], "id": item.get("id", "")} for item in batch
                 ]
@@ -62,6 +63,16 @@ async def pending_worker(
                 success, message = sheets_api.append_emails(emails_data)
 
                 if success:
+                    # 🆕 تسجيل الـ IDs في الـ history
+                    ids_to_record = [
+                        item.get("id", "") 
+                        for item in batch 
+                        if item.get("id") and item.get("id") not in ["N/A", "", None]
+                    ]
+                    
+                    if ids_to_record:
+                        add_ids_to_history(ids_to_record)
+                    
                     # نجاح: مسح من pending
                     clear_batch("pending.json", emails)
 
@@ -106,7 +117,7 @@ async def retry_worker(
 
     - يجيب كل الإيميلات من retry.json
     - يحاول يضيفهم كلهم دفعة واحدة للشيت
-    - لو نجح: يمسح الملف
+    - لو نجح: يمسح الملف ويسجل الـ IDs
     - لو فشل: يزيد عداد المحاولات أو ينقل لـ failed
     """
     queue_config = config.get("queue", {})
@@ -122,7 +133,7 @@ async def retry_worker(
             batch = get_retry_batch()
 
             if batch:
-                # ✅ الجديد: تمرير Email + ID
+                # تمرير Email + ID
                 emails_data = [
                     {"email": item["email"], "id": item.get("id", "")} for item in batch
                 ]
@@ -135,6 +146,16 @@ async def retry_worker(
                 success, message = sheets_api.append_emails(emails_data)
 
                 if success:
+                    # 🆕 تسجيل الـ IDs في الـ history
+                    ids_to_record = [
+                        item.get("id", "") 
+                        for item in batch 
+                        if item.get("id") and item.get("id") not in ["N/A", "", None]
+                    ]
+                    
+                    if ids_to_record:
+                        add_ids_to_history(ids_to_record)
+                    
                     # نجاح: مسح من retry
                     clear_batch("retry.json", emails)
 
